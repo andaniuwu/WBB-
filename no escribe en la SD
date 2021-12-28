@@ -317,7 +317,7 @@ delay(100);
               sensores.println(now.second(), DEC);
               sensores.println();
               delay(100);
-              i++;
+              j++;
               }
               
 Serial.print("\n registro terminado, puede apagar el dispositivo. \n");
