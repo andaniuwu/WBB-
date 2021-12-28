@@ -1,0 +1,338 @@
+#define sclk    9                          // (naranja con blanco) pin SCLK ADS1222 1 y 2, entrada de reloj de serie -D2
+#define Dout1   3                          // (gris con rojo) pin Dout ADS1222 1, DRDY/DOUT drdy-> nivel bajo datos a leer listos, salida de datos por flaco positivo de slck, MSB primero -D3
+#define Dout2   7                          // (gris) pin Dout ADS1222 2, DRDY/DOUT drdy-> nivel bajo datos a leer listos, salida de datos por flaco positivo de slck, MSB primero -D4
+#define mux     5                          // (naranja) pin MUX ADS1222 1 y 2, selección de la entrada analógica 0->AINP1+ AINN1- 1->AINP2+ AINN2 -D5
+
+// PULSADOR_wii 2                     // -A0 (los dos negros)(entradas arduino uno)
+#define LED_wii      6                     // -A1 (negativo azul, positivo blanco)
+#define ON_wii       8                     // -A2 (gris)
+  int pulsador;
+unsigned long sensor [4] ={0, 0, 0, 0}, s[4] ={0, 1, 2, 3};
+
+  int g0=0,g1=0,g2=0,g3=0,a=0,b=0,c=0,d=0;
+  int prom0=0,prom1=0,prom2=0,prom3=0,S0=0,S1=0,S2=0,S3=0;
+  int i,j,k,m,L;
+  String x;
+
+//Bibliotecas para pantalla Oled
+#include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#define ANCHO_PANTALLA 128 // ancho pantalla OLED
+#define ALTO_PANTALLA 64 // alto pantalla OLED
+#define OLED_RESET 10
+        Adafruit_SSD1306 display(128, 64, &Wire, -1);
+
+
+
+//Bibliotecas y variables para RTC
+#include <Wire.h>
+#include "RTClib.h"
+// RTC_DS1307 rtc; (si tuviera el otro)
+RTC_DS3231 rtc;
+
+//Bibliotecas y variables para Módulo microSD
+#include <SD.h>
+#include <SPI.h>
+
+File sensores;
+
+
+
+//##########################################################################################
+// Inicializa ADS1222
+void iniADS1222(void){
+byte x, n;
+  digitalWrite(mux, HIGH);
+  for (n =0; n <3; n++){                                          // realizamos 3 lecturas completas
+    delay (10);
+    for(x =0; x <24; x++){                                        // 24 pulsos-> 24 bits
+      digitalWrite(sclk, HIGH);                                   // HIGH pulse, algo más de 33us
+      delayMicroseconds(30);  
+      digitalWrite(sclk, LOW);                                    // LOW pulse, algo más de 33us
+      delayMicroseconds(30);                          
+    }
+  }
+  delay (10);
+  while (digitalRead(Dout1) + digitalRead(Dout2)){}               // esperamos datos preparados 
+  for(x =0; x <26; x++){                                          // auto-calibrado 26 pulsos-> 24bits + 2  On calibración
+    digitalWrite(sclk, HIGH); 
+    delayMicroseconds(5);  
+    digitalWrite(sclk, LOW); 
+    delayMicroseconds(5);
+   }
+   #ifdef debug
+    Serial.println("Auto-calibrado..");
+   #endif
+   while (digitalRead(Dout1) + digitalRead(Dout2)){}              // esperamos fin calibracion                           
+   #ifdef debug
+    Serial.println("Inicializando");
+   #endif
+} 
+
+// ADS1222 leemos (se leen los 20 bits MSB, solo son efectivos los 20 bits de más peso)
+void read_ads1222(bool canal){
+byte x, n =0, z =2;
+  if (canal){
+    n =1;
+    z =3;
+  }
+  digitalWrite(mux, canal);                                        // selecionamos el canal
+  delayMicroseconds(4);  //tenia 8
+  do{
+    delayMicroseconds(2); // tenía 2
+  } while (digitalRead(Dout1) + digitalRead(Dout2));               // esperamos datos listos, Dout1 y Dout2 
+  
+  for(x =23; x >=4; x--){                                          // del bit 23 al 3
+    digitalWrite(sclk, HIGH);
+    digitalRead(Dout1) ? bitWrite(sensor[n], x, 1): bitWrite(sensor[n], x, 0);// algo más de 16us, leemos 0 y 1 
+    digitalRead(Dout2) ? bitWrite(sensor[z], x, 1): bitWrite(sensor[z], x, 0);// algo más de 16us, leemos 2 y 3
+    digitalWrite(sclk, LOW);
+    delayMicroseconds(10);  //tenía 30
+  }
+  for (x =0; x <5; x++){                                           // realizamos 5 pulsos, bits del 3 al 0 + pulso 25 -> forzamos Dout1 y Dout2 a 1
+  digitalWrite(sclk, HIGH);
+  delayMicroseconds(10);  //tenía 30                                                 
+  digitalWrite(sclk, LOW);
+  delayMicroseconds(10);    //tenía 30
+  }
+}
+
+// configuración inicial
+void setup() {
+byte ciclo =0;
+  pinMode(ON_wii, OUTPUT);                           
+  digitalWrite(ON_wii, HIGH);                             // encendemos controladore WII y TFT                                          
+  pinMode(mux, OUTPUT);                           
+  digitalWrite(mux, LOW);  
+  pinMode(sclk, OUTPUT);                           
+  digitalWrite(sclk, LOW); 
+  pinMode(LED_wii, OUTPUT);
+  digitalWrite(LED_wii, HIGH);  
+   
+  pinMode(Dout1, INPUT);
+  pinMode(Dout2, INPUT);          
+
+
+
+
+
+  Serial.begin(115200);
+  digitalWrite(LED_wii, HIGH);
+  iniADS1222();
+  delay(200);
+
+//comprobación y ajuste de RTC
+// Se establece fecha y hora sólo la primera vez, una vez hecho se comenta esta línea
+    if (! rtc.begin()) {
+    Serial.println("no se encuentra modulo RTC");
+
+  }
+//  RTC.adjust(DateTime(__DATE__,__TIME__));
+//  rtc.adjust(DateTime(2021, 12, 27, 23, 5, 0));
+//  RTC.adjust(DateTime(2021, 12, 23, 7, 15, 0));
+   // This line sets the RTC with an explicit date & time, for example to set
+    // January 21, 2014 at 3am you would call:
+    // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
+  
+
+
+//comprobación y ajuste de modulo SD
+delay(100);
+
+   Serial.print(F("Iniciando SD ..."));
+  if (!SD.begin(10)){
+    Serial.print(F("Error al iniciar"));
+    return;
+  }
+  Serial.println(F("Iniciado correctamente"));
+
+if (SD.exists("registro.txt")) {
+   Serial.println("sí existe el archivo registro.txt...");
+}else{
+   Serial.println("el archivo registro.txt no existe"); 
+   Serial.println("creando archivo registro.txt, espere");
+   sensores = SD.open("registro.txt", FILE_WRITE);
+   sensores.close();
+   Serial.println("archivo registro.txt creado");
+
+}
+
+
+
+
+//interrupción
+attachInterrupt(digitalPinToInterrupt(2),registro, FALLING);
+
+//calibración
+      read_ads1222(0);
+      read_ads1222(1);
+
+
+      Serial.print("\ncalibrando... \n");
+ 
+      for(int i = 0; i<100; i++){
+          g0 =  sensor[0];
+          g1 =  sensor[1];
+          g2 =  sensor[2];
+          g3 =  sensor[3];
+
+          a = a+g0;
+          b = b+g1;
+          c = c+g2;
+          d = d+g3;
+delay (10);
+
+      }
+
+          prom0 = (a/100);
+          prom1 = (b/100);
+          prom2 = (c/100);
+          prom3 = (d/100);
+
+                      Serial.print("\ncalibración finalizada, el valor promedio de cada sensor es: \n");
+                      Serial.print("\nsensor 1 \n");
+                      Serial.print(prom0);
+                      Serial.print(" \n");
+                      Serial.print("\nsensor 2 \n");
+                      Serial.print(prom1);
+                      Serial.print(" \n");
+                      Serial.print("\nsensor 3 \n");
+                      Serial.print(prom2);
+                      Serial.print(" \n");
+                      Serial.print("\nsensor 4 \n");
+                      Serial.print(prom3);
+                      Serial.print(" \n");
+
+
+
+}
+
+
+
+// **-MAIN-**
+void loop() {
+
+  
+      read_ads1222(0);
+      read_ads1222(1);
+           
+                    S0= (sensor[0]- prom0)+35000;
+                    S1= (sensor[1]- prom1)+1000;
+                    S2= (sensor[2]- prom2)+5000;
+                    S3= (sensor[3]- prom3)+20000;
+            
+                  Serial.print(" \n");
+                  Serial.print(S0);
+                  Serial.print(" ");
+                  Serial.print(S1);
+                  Serial.print(" ");
+                  Serial.print(S2);
+                  Serial.print(" ");            
+                  Serial.println(S3);
+
+                   DateTime now = rtc.now();              
+                  Serial.println("   ");
+    Serial.print(now.year(), DEC);
+    Serial.print('/');
+    Serial.print(now.month(), DEC);
+    Serial.print('/');
+    Serial.print(now.day(), DEC);
+    Serial.print("    ");
+    Serial.print(now.hour(), DEC);
+    Serial.print(':');
+    Serial.print(now.minute(), DEC);
+    Serial.print(':');
+    Serial.print(now.second(), DEC);
+    Serial.println();
+    
+delay(1000);
+      
+}
+
+
+void registro(){
+      read_ads1222(0);
+      read_ads1222(1);
+           
+                    S0= (sensor[0]- prom0)+35000;
+                    S1= (sensor[1]- prom1)+1000;
+                    S2= (sensor[2]- prom2)+5000;
+                    S3= (sensor[3]- prom3)+20000;
+            
+   
+delay(100);
+    //asignación de datos en la SD
+    sensores = SD.open("registro.txt", FILE_WRITE);//abrimos  el archivo
+    delay(100);
+     if (sensores) { 
+        delay(100);
+        Serial.print("Escribiendo en SD: ");
+
+
+       //aqui no escribe en el archivo que crea al inicio, se salta e inmediatamente dice que está terminado
+       //pero al abrir el archivo sigue en blanco, a aveces sale que no se puede abrir el archivo
+       //probable inestabilidad por falta de memoria (ya ocupé el 80%)
+        
+              while (j>60){
+
+              Serial.print("Escribiendo en SD: dato ");
+              Serial.print(j);
+              Serial.print(" de 60.");
+              
+              sensores.print(", sensor1= ");
+              sensores.println(S0);
+              sensores.print(", sensor2= ");
+              sensores.println(S1);
+              sensores.print(", sensor3= ");
+              sensores.println(S2);
+              sensores.print(", sensor4= ");
+              sensores.println(S3);
+
+              sensores.print(", Fecha y hora: ");
+              
+              DateTime now = rtc.now();
+              sensores.println(now.year(), DEC);
+              sensores.println('/');
+              sensores.println("\t");
+              sensores.println(" ");
+              
+              sensores.println(now.month(), DEC);
+              sensores.println('/');
+              sensores.println("\t");
+              sensores.println(" ");
+              sensores.println(now.day(), DEC);
+              
+              sensores.println(now.hour(), DEC);
+              sensores.println(':');
+              sensores.println("\t");
+              sensores.println(" ");
+              
+              sensores.println(now.minute(), DEC);
+              sensores.println(':');
+              sensores.println("\t");
+              sensores.println(" ");
+              
+              sensores.println(now.second(), DEC);
+              sensores.println();
+              delay(100);
+              i++;
+              }
+              
+Serial.print("\n registro terminado, puede apagar el dispositivo. \n");
+              
+
+                        delay(100);
+              
+
+} else {
+    Serial.println("Error al abrir el archivo");
+  }        
+        
+        sensores.close(); //cerramos el archivo
+        delay(300);
+
+        
+
+}
